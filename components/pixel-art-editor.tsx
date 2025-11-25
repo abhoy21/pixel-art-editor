@@ -2,6 +2,7 @@
 
 import type React from "react"
 import { useState, useEffect, useRef, useCallback } from "react"
+import Link from "next/link"
 import {
   Plus,
   Trash2,
@@ -784,6 +785,19 @@ export default function PixelArtEditor() {
             </div>
           </div>
         </SidebarContent>
+        
+        <div className="mt-auto border-t border-pixel-editor-border p-4 group-data-[collapsible=icon]:hidden">
+          <Link 
+            href="https://www.abhoy.xyz/" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-sm text-zinc-400 hover:text-orange-500 transition-colors flex items-center gap-2"
+          >
+            know more about
+            <span className="underline"> Abhoy Sarkar</span>
+          </Link>
+        </div>
+        
         <SidebarRail />
       </Sidebar>
     </div>
