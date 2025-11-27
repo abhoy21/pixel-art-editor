@@ -1,44 +1,50 @@
 "use client"
 
-import type React from "react"
-import { useState, useEffect, useRef, useCallback } from "react"
-import Link from "next/link"
 import {
-  Plus,
-  Trash2,
-  Eye,
-  EyeOff,
-  Download,
-  Undo2,
-  Redo2,
-  Eraser,
-  PaintBucket,
-  Pencil,
-  Grid3X3,
-  Pipette,
-  ZoomIn,
-  ZoomOut,
-  ChevronDown,
-  Moon,
-  Sun,
-} from "lucide-react"
-import { cn } from "@/lib/utils"
-import { useTheme } from "next-themes"
-import {
-  SidebarProvider,
-  Sidebar,
-  SidebarContent,
-  SidebarHeader,
-  SidebarTrigger,
-  SidebarInset,
-  SidebarRail,
-} from "@/components/ui/sidebar"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+import { cn } from "@/lib/utils"
+import {
+  ChevronDown,
+  Download,
+  Eraser,
+  Grid3X3,
+  Keyboard,
+  Moon,
+  PaintBucket,
+  Pencil,
+  Pipette,
+  Plus,
+  Redo2,
+  Sun,
+  Undo2,
+  X,
+  ZoomIn,
+  ZoomOut
+} from "lucide-react"
+import { useTheme } from "next-themes"
+import Link from "next/link"
+import type React from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 
 
@@ -58,6 +64,31 @@ interface HistoryState {
   layers: Layer[]
   gridSize: number
 }
+
+type ShortcutAction = 
+  | "tool-pencil"
+  | "tool-eraser"
+  | "tool-bucket"
+  | "tool-picker"
+  | "undo"
+  | "redo"
+  | "zoom-in"
+  | "zoom-out"
+  | "toggle-grid"
+  | "export"
+  | "add-layer"
+  | "delete-layer"
+  | "toggle-shortcuts"
+
+interface ShortcutBinding {
+  key: string
+  ctrl?: boolean
+  shift?: boolean
+  alt?: boolean
+  meta?: boolean
+}
+
+type ShortcutsMap = Record<ShortcutAction, ShortcutBinding>
 
 const DEFAULT_GRID_SIZE = 16
 const MAX_HISTORY = 20
@@ -98,6 +129,67 @@ const createEmptyGrid = (size: number): PixelGrid => {
 
 const generateId = () => Math.random().toString(36).substr(2, 9)
 
+const OPACITY_PRESETS = [100, 90, 75, 60, 45, 30, 15, 0]
+
+const DEFAULT_SHORTCUTS: ShortcutsMap = {
+  "tool-pencil": { key: "b" },
+  "tool-eraser": { key: "e" },
+  "tool-bucket": { key: "f" },
+  "tool-picker": { key: "i" },
+  "undo": { key: "z", ctrl: true },
+  "redo": { key: "z", ctrl: true, shift: true },
+  "zoom-in": { key: "=", ctrl: true },
+  "zoom-out": { key: "-", ctrl: true },
+  "toggle-grid": { key: "g" },
+  "export": { key: "e", ctrl: true, shift: true },
+  "add-layer": { key: "n", ctrl: true, shift: true },
+  "delete-layer": { key: "Delete", shift: true },
+  "toggle-shortcuts": { key: "/", ctrl: true },
+}
+
+const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
+  "tool-pencil": "Pencil Tool",
+  "tool-eraser": "Eraser Tool",
+  "tool-bucket": "Fill Tool",
+  "tool-picker": "Color Picker",
+  "undo": "Undo",
+  "redo": "Redo",
+  "zoom-in": "Zoom In",
+  "zoom-out": "Zoom Out",
+  "toggle-grid": "Toggle Grid",
+  "export": "Export",
+  "add-layer": "Add Layer",
+  "delete-layer": "Delete Layer",
+  "toggle-shortcuts": "Show Shortcuts",
+}
+
+const formatShortcut = (binding: ShortcutBinding): string => {
+  const parts: string[] = []
+  if (binding.meta || binding.ctrl) parts.push(navigator.platform.includes("Mac") ? "⌘" : "Ctrl")
+  if (binding.alt) parts.push("Alt")
+  if (binding.shift) parts.push("Shift")
+  
+  let key = binding.key
+  if (key === " ") key = "Space"
+  if (key.length === 1) key = key.toUpperCase()
+  
+  parts.push(key)
+  return parts.join(" + ")
+}
+
+const getLayerPreviewColors = (layer: Layer) => {
+  const colors: string[] = []
+  outer: for (let y = 0; y < layer.grid.length; y++) {
+    for (let x = 0; x < layer.grid[y].length; x++) {
+      const color = layer.grid[y][x]
+      if (color && !colors.includes(color)) {
+        colors.push(color)
+        if (colors.length === 4) break outer
+      }
+    }
+  }
+  return colors
+}
 
 
 export default function PixelArtEditor() {
@@ -116,9 +208,16 @@ export default function PixelArtEditor() {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [showGridLines, setShowGridLines] = useState(true)
   const [zoom, setZoom] = useState(1)
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null)
+  const [editingLayerName, setEditingLayerName] = useState("")
+  const [shortcuts, setShortcuts] = useState<ShortcutsMap>(DEFAULT_SHORTCUTS)
+  const [showShortcutsDialog, setShowShortcutsDialog] = useState(false)
+  const [editingShortcut, setEditingShortcut] = useState<ShortcutAction | null>(null)
+  const [pendingShortcut, setPendingShortcut] = useState<ShortcutBinding | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const layerNameInputRef = useRef<HTMLInputElement>(null)
 
 
   useEffect(() => {
@@ -128,6 +227,191 @@ export default function PixelArtEditor() {
       setHistoryIndex(0)
     }
   }, [])
+
+  // Load shortcuts from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("pixel-art-shortcuts")
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        setShortcuts({ ...DEFAULT_SHORTCUTS, ...parsed })
+      } catch (e) {
+        console.error("Failed to load shortcuts:", e)
+      }
+    }
+  }, [])
+
+  // Save shortcuts to localStorage
+  useEffect(() => {
+    localStorage.setItem("pixel-art-shortcuts", JSON.stringify(shortcuts))
+  }, [shortcuts])
+
+  // Keyboard capture for editing shortcuts
+  useEffect(() => {
+    if (!editingShortcut) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      // Don't allow Escape to be captured
+      if (e.key === "Escape") {
+        setEditingShortcut(null)
+        setPendingShortcut(null)
+        return
+      }
+
+      const key = e.key === " " ? " " : e.key
+      const binding: ShortcutBinding = {
+        key,
+        ctrl: e.ctrlKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+      }
+
+      setPendingShortcut(binding)
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => window.removeEventListener("keydown", handleKeyDown, true)
+  }, [editingShortcut])
+
+  // Save shortcut when pending binding is set
+  useEffect(() => {
+    if (pendingShortcut && editingShortcut) {
+      // Normalize: on Mac, save meta as ctrl for consistency
+      const isMac = navigator.platform.includes("Mac")
+      const normalizedBinding: ShortcutBinding = isMac && pendingShortcut.meta
+        ? { ...pendingShortcut, ctrl: true, meta: false }
+        : pendingShortcut
+
+      // Check for conflicts
+      const hasModifier = normalizedBinding.ctrl || normalizedBinding.meta
+      
+      const hasConflict = Object.entries(shortcuts).some(
+        ([action, binding]) => {
+          if (action === editingShortcut) return false
+          
+          const keyMatches = binding.key.toLowerCase() === normalizedBinding.key.toLowerCase()
+          const modifierMatches = isMac
+            ? (binding.ctrl || binding.meta) === hasModifier
+            : !!binding.ctrl === normalizedBinding.ctrl && !!binding.meta === normalizedBinding.meta
+          const shiftMatches = !!binding.shift === normalizedBinding.shift
+          const altMatches = !!binding.alt === normalizedBinding.alt
+          
+          return keyMatches && modifierMatches && shiftMatches && altMatches
+        }
+      )
+
+      if (!hasConflict) {
+        setShortcuts((prev) => ({
+          ...prev,
+          [editingShortcut]: normalizedBinding,
+        }))
+        setEditingShortcut(null)
+        setPendingShortcut(null)
+      } else {
+        // Show conflict message (could be enhanced with toast)
+        alert("This shortcut is already in use!")
+        setPendingShortcut(null)
+      }
+    }
+  }, [pendingShortcut, editingShortcut, shortcuts])
+
+  // Keyboard event handler
+  useEffect(() => {
+    if (editingShortcut || showShortcutsDialog) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in inputs
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        editingLayerId !== null
+      ) {
+        return
+      }
+
+      const key = e.key === " " ? " " : e.key.toLowerCase()
+      const binding: ShortcutBinding = {
+        key,
+        ctrl: e.ctrlKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+        meta: e.metaKey,
+      }
+
+      // Check each shortcut
+      // Normalize: on Mac, meta key should match ctrl shortcuts
+      const isMac = navigator.platform.includes("Mac")
+      const hasModifier = binding.ctrl || binding.meta
+
+      for (const [action, shortcut] of Object.entries(shortcuts)) {
+        const keyMatches = shortcut.key.toLowerCase() === binding.key.toLowerCase()
+        const modifierMatches = isMac
+          ? (shortcut.ctrl || shortcut.meta) === hasModifier
+          : !!shortcut.ctrl === binding.ctrl && !!shortcut.meta === binding.meta
+        const shiftMatches = !!shortcut.shift === binding.shift
+        const altMatches = !!shortcut.alt === binding.alt
+
+        if (keyMatches && modifierMatches && shiftMatches && altMatches) {
+          e.preventDefault()
+          handleShortcutAction(action as ShortcutAction)
+          return
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [shortcuts, editingLayerId, editingShortcut, showShortcutsDialog, historyIndex, history.length, tool, showGridLines, zoom, layers, activeLayerId])
+
+  const handleShortcutAction = (action: ShortcutAction) => {
+    switch (action) {
+      case "tool-pencil":
+        setTool("pencil")
+        break
+      case "tool-eraser":
+        setTool("eraser")
+        break
+      case "tool-bucket":
+        setTool("bucket")
+        break
+      case "tool-picker":
+        setTool("picker")
+        break
+      case "undo":
+        undo()
+        break
+      case "redo":
+        redo()
+        break
+      case "zoom-in":
+        handleZoomIn()
+        break
+      case "zoom-out":
+        handleZoomOut()
+        break
+      case "toggle-grid":
+        setShowGridLines(!showGridLines)
+        break
+      case "export":
+        handleExport()
+        break
+      case "add-layer":
+        addLayer()
+        break
+      case "delete-layer":
+        if (layers.length > 1) {
+          deleteLayer(activeLayerId)
+        }
+        break
+      case "toggle-shortcuts":
+        setShowShortcutsDialog(!showShortcutsDialog)
+        break
+    }
+  }
 
 
 
@@ -290,6 +574,33 @@ export default function PixelArtEditor() {
   
   }
 
+  const updateLayerName = (id: string, name: string) => {
+    const trimmedName = name.trim() || `Layer ${layers.findIndex((l) => l.id === id) + 1}`
+    const newLayers = layers.map((l) => (l.id === id ? { ...l, name: trimmedName } : l))
+    setLayers(newLayers)
+    addToHistory(newLayers, gridSize)
+  }
+
+  const startEditingLayerName = (layer: Layer) => {
+    setEditingLayerId(layer.id)
+    setEditingLayerName(layer.name)
+    setTimeout(() => {
+      layerNameInputRef.current?.focus()
+      layerNameInputRef.current?.select()
+    }, 0)
+  }
+
+  const saveLayerName = (id: string) => {
+    updateLayerName(id, editingLayerName)
+    setEditingLayerId(null)
+    setEditingLayerName("")
+  }
+
+  const cancelEditingLayerName = () => {
+    setEditingLayerId(null)
+    setEditingLayerName("")
+  }
+
   const changeGridSize = (size: number) => {
     if (size === gridSize) return
  
@@ -407,83 +718,157 @@ export default function PixelArtEditor() {
             </div>
           </SidebarHeader>
           
-          <SidebarContent className="p-4 pt-0">
-            <div className="flex-1 flex flex-col bg-pixel-editor-panel rounded-2xl overflow-hidden border border-pixel-editor-border shadow-xl group-data-[collapsible=icon]:hidden">
-              <div className="p-4 border-b border-pixel-editor-border flex items-center justify-between bg-pixel-editor-panel-dark">
-                <span className="text-sm font-medium text-zinc-300">Layers</span>
+          <SidebarContent className="p-2 space-y-4">
+            <div className="bg-pixel-editor-panel rounded-2xl border border-pixel-editor-border shadow-xl group-data-[collapsible=icon]:hidden p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Layers</p>
+                  <p className="text-sm text-zinc-300">Organize your artwork</p>
+                </div>
                 <button
                   onClick={addLayer}
-                  className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white"
+                  className="h-9 w-9 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center text-white hover:bg-white/10 transition-colors"
                 >
                   <Plus size={16} />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              <div className="max-h-[520px] overflow-y-auto space-y-2">
                 {layers
                   .slice()
                   .reverse()
-                  .map((layer) => (
-                    <div
-                      key={layer.id}
-                      onClick={() => setActiveLayerId(layer.id)}
-                      className={cn(
-                        "group flex flex-col gap-2 p-3 rounded-xl cursor-pointer transition-all border border-transparent",
-                        activeLayerId === layer.id ? "bg-pixel-editor-panel-dark border-pixel-editor-border shadow-lg" : "hover:bg-white/5",
-                      )}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleLayerVisibility(layer.id)
-                            }}
-                            className={cn(
-                              "p-1 rounded-md transition-colors",
-                              layer.visible ? "text-zinc-400 hover:text-white" : "text-zinc-600",
-                            )}
-                          >
-                            {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                          </button>
-                          <span
-                            className={cn(
-                              "text-sm font-medium",
-                              activeLayerId === layer.id ? "text-white" : "text-zinc-400",
-                            )}
-                          >
-                            {layer.name}
-                          </span>
+                  .map((layer) => {
+                    const previewColors = getLayerPreviewColors(layer)
+                    const previewStyle =
+                      previewColors.length === 0
+                        ? {
+                            backgroundImage:
+                              "linear-gradient(45deg, #27272a 25%, transparent 25%), linear-gradient(-45deg, #27272a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #27272a 75%), linear-gradient(-45deg, transparent 75%, #27272a 75%)",
+                            backgroundSize: "10px 10px",
+                            backgroundPosition: "0 0, 0 5px, 5px -5px, -5px 0px",
+                            backgroundColor: "#18181b",
+                          }
+                        : previewColors.length === 1
+                        ? { backgroundColor: previewColors[0] }
+                        : {
+                            backgroundImage: `linear-gradient(135deg, ${previewColors.join(", ")})`,
+                          }
+                    return (
+                      <div
+                        key={layer.id}
+                        onClick={() => setActiveLayerId(layer.id)}
+                        className={cn(
+                          "group relative flex items-center gap-3 p-2 rounded-xl border transition-all",
+                          activeLayerId === layer.id
+                            ? "border-orange-500/40 bg-white/5 shadow-lg"
+                            : "border-white/5 bg-white/0 hover:bg-white/5",
+                        )}
+                      >
+                       
+
+                        <div
+                          className="w-10 h-10 rounded-lg border border-white/10 overflow-hidden shadow-inner"
+                          style={previewStyle}
+                        />
+
+                        <div className="flex-1 min-w-0">
+                          {editingLayerId === layer.id ? (
+                            <input
+                              ref={layerNameInputRef}
+                              type="text"
+                              value={editingLayerName}
+                              onChange={(e) => setEditingLayerName(e.target.value)}
+                              onBlur={() => saveLayerName(layer.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault()
+                                  saveLayerName(layer.id)
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault()
+                                  cancelEditingLayerName()
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full text-sm font-medium bg-white/10 border border-orange-500/50 rounded px-2 py-1 text-white focus:outline-none focus:ring-1 focus:ring-orange-500"
+                            />
+                          ) : (
+                            <p
+                              onDoubleClick={(e) => {
+                                e.stopPropagation()
+                                startEditingLayerName(layer)
+                              }}
+                              className={cn(
+                                "text-sm font-medium truncate cursor-text hover:text-white transition-colors",
+                                activeLayerId === layer.id ? "text-white" : "text-zinc-400",
+                              )}
+                              title="Double-click to rename"
+                            >
+                              {layer.name}
+                            </p>
+                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-1 inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-zinc-500/80 text-xs p-1 rounded-lg border border-white/5 bg-white/5 hover:bg-white/10 transition-colors"
+                              >
+                                <span>Opacity</span>
+                                <span className="text-white">{layer.opacity}%</span>
+                                <ChevronDown size={12} className="text-zinc-500" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="start"
+                              className="min-w-[140px] bg-pixel-editor-panel border border-pixel-editor-border"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="px-3 py-2 text-xs text-zinc-500">Quick set</div>
+                              {OPACITY_PRESETS.map((value) => (
+                                <DropdownMenuItem
+                                  key={value}
+                                  onClick={() => updateLayerOpacity(layer.id, value)}
+                                  className={cn(
+                                    "text-sm text-zinc-200 cursor-pointer",
+                                    value === layer.opacity && "text-orange-400",
+                                  )}
+                                >
+                                  {value}%
+                                </DropdownMenuItem>
+                              ))}
+                              <div className="px-3 py-2 text-xs text-zinc-500 border-t border-white/5">Fine tune</div>
+                              <div className="flex items-center gap-2 px-3 pb-3">
+                                <button
+                                  onClick={() => updateLayerOpacity(layer.id, Math.max(layer.opacity - 5, 0))}
+                                  className="h-7 w-7 rounded-md border border-white/10 text-white/70 hover:bg-white/10"
+                                >
+                                  -
+                                </button>
+                                <span className="text-sm text-white font-medium w-10 text-center">{layer.opacity}%</span>
+                                <button
+                                  onClick={() => updateLayerOpacity(layer.id, Math.min(layer.opacity + 5, 100))}
+                                  className="h-7 w-7 rounded-md border border-white/10 text-white/70 hover:bg-white/10"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
+
                         {layers.length > 1 && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
                               deleteLayer(layer.id)
                             }}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/10 hover:text-red-500 rounded-md transition-all"
+                            className="absolute top-1 right-1 h-5 w-5 flex items-center justify-center rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
                           >
-                            <Trash2 size={14} />
+                            <X size={14} />
                           </button>
                         )}
                       </div>
-
-                      {activeLayerId === layer.id && (
-                        <div className="flex items-center gap-2 px-1 group-data-[collapsible=icon]:hidden">
-                          <span className="text-[10px] text-zinc-500 w-8 flex-shrink-0">Opac</span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="100"
-                            value={layer.opacity}
-                            onChange={(e) => updateLayerOpacity(layer.id, Number.parseInt(e.target.value))}
-                            className="flex-1 min-w-0 h-1 bg-zinc-700 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-orange-500"
-                          />
-                          <span className="text-[10px] text-zinc-500 w-6 text-right flex-shrink-0">{layer.opacity}%</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    )
+                  })}
               </div>
             </div>
           </SidebarContent>
@@ -579,6 +964,14 @@ export default function PixelArtEditor() {
               title="Toggle theme"
             >
               {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+
+            <button
+              onClick={() => setShowShortcutsDialog(true)}
+              className="p-2 rounded-lg border border-pixel-editor-border bg-pixel-editor-panel hover:bg-white/5 transition-colors"
+              title="Keyboard shortcuts"
+            >
+              <Keyboard size={18} />
             </button>
 
             <button
@@ -800,6 +1193,90 @@ export default function PixelArtEditor() {
         
         <SidebarRail />
       </Sidebar>
+
+      {/* Keyboard Shortcuts Dialog */}
+      <Dialog open={showShortcutsDialog} onOpenChange={setShowShortcutsDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-pixel-editor-panel border-pixel-editor-border">
+          <DialogHeader>
+            <DialogTitle className="text-white">Keyboard Shortcuts</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Customize keyboard shortcuts. Click on any shortcut to edit it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-6 space-y-4">
+            {Object.entries(SHORTCUT_LABELS).map(([action, label]) => {
+              const isEditing = editingShortcut === action
+              const currentBinding = shortcuts[action as ShortcutAction]
+
+              return (
+                <div
+                  key={action}
+                  className="flex items-center justify-between p-3 rounded-lg border border-pixel-editor-border bg-pixel-editor-panel-dark hover:bg-white/5 transition-colors"
+                >
+                  <span className="text-sm text-zinc-300">{label}</span>
+                  <div className="flex items-center gap-2">
+                    {isEditing ? (
+                      <div className="flex items-center gap-2">
+                        <kbd className="px-3 py-1.5 bg-orange-500/10 border border-orange-500/30 rounded-md text-xs text-orange-400 font-mono min-w-[120px] text-center">
+                          {pendingShortcut ? formatShortcut(pendingShortcut) : "Press keys..."}
+                        </kbd>
+                        <button
+                          onClick={() => {
+                            setEditingShortcut(null)
+                            setPendingShortcut(null)
+                          }}
+                          className="px-2 py-1 text-xs text-zinc-400 hover:text-white"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <kbd className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-md text-xs text-zinc-300 font-mono min-w-[120px] text-center">
+                          {formatShortcut(currentBinding)}
+                        </kbd>
+                        <button
+                          onClick={() => {
+                            setEditingShortcut(action as ShortcutAction)
+                            setPendingShortcut(null)
+                          }}
+                          className="px-2 py-1 text-xs text-zinc-400 hover:text-orange-500 transition-colors"
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-6 flex items-center justify-between pt-4 border-t border-pixel-editor-border">
+            <button
+              onClick={() => {
+                setShortcuts(DEFAULT_SHORTCUTS)
+                setEditingShortcut(null)
+                setPendingShortcut(null)
+              }}
+              className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors"
+            >
+              Reset to Defaults
+            </button>
+            <button
+              onClick={() => {
+                setShowShortcutsDialog(false)
+                setEditingShortcut(null)
+                setPendingShortcut(null)
+              }}
+              className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
     </SidebarProvider>
   )
